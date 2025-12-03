@@ -1,9 +1,5 @@
-const Redis = require("ioredis");
-const {
-  TTL_USERS,
-  TTL_POSTS,
-  TTL_COMMENTS
-} = require('./ttlconfig');
+import Redis from "ioredis";
+import { TTL_USERS, TTL_POSTS, TTL_COMMENTS } from './ttlconfig';
 
 const redisUrl = process.env.REDIS_URL;
 const users_cache_name = process.env.USERS_TABLE_NAME;
@@ -251,7 +247,7 @@ async function commentsCacheClearTable() {
   return await redisClearPattern(`${comments_cache_name}:*`);
 }
 
-module.exports = { 
+export default { 
   usersCacheSet,usersCacheMSet,usersCacheGet,usersCacheDel,usersCacheClearTable,
   postsCacheSet,postsCacheMSet,postsCacheGet,postsCacheDel,postsCacheClearTable,
   commentsCacheSet,commentsCacheMSet,commentsCacheGet,commentsCacheDel,commentsCacheClearTable

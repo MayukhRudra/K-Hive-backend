@@ -1,8 +1,12 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import mongocon from "./config/mongocon.js";
 import helmet from 'helmet';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
+import passport from './config/passport.js';
+import authRoutes from './routes/authRoutes.js';
 import errorHandler from './middleware/errorHandler.js';
 
 const app = express();
@@ -46,6 +50,15 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Cookie parser middleware (required for JWT in cookies)
+app.use(cookieParser());
+
+// MongoDB connection
+mongocon.connectDB();
+
+// Passport middleware (no session needed for JWT)
+app.use(passport.initialize());
+
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
@@ -54,6 +67,9 @@ if (process.env.NODE_ENV === 'development') {
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', message: 'KIIT Forum API is running' });
 });
+
+// Routes
+app.use('/api/auth', authRoutes);
 
 // Error handling middleware (must be last)
 app.use(errorHandler);

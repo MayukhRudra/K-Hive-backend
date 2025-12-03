@@ -1,56 +1,50 @@
-const { MongoClient } = require("mongodb");
+// mongocon.js
+import { MongoClient } from "mongodb";
 
 const uri = process.env.MONGO_URI;
-const db_name = process.env.DB_NAME;
-
-const users_col_name = process.env.USERS_TABLE_NAME;
-const posts_col_name = process.env.POSTS_TABLE_NAME;
-const comments_col_name = process.env.COMMENTS_TABLE_NAME;
+const dbName = process.env.DB_NAME;
 
 let client;
 let db;
 
-async function mongoDB() {
-  if (db) return db;
-
+async function connectDB() {
   try {
+    // If DB already initialized → reuse it
+    if (db) return db;
+
+    // If no client, create one
     if (!client) {
-      client = new MongoClient(uri);
+      client = new MongoClient(uri, {
+        maxPoolSize: 10,
+        connectTimeoutMS: 20000,
+      });
+
       await client.connect();
+      console.log("MongoDB connected");
     }
 
-    db = client.db(db_name);
+    db = client.db(dbName);
     return db;
 
   } catch (err) {
-    console.error("Unable to connect to MongoDB:", err.message);
-    return null;
+    console.error("MongoDB connection error:", err);
+    throw err;
   }
 }
 
 async function usersCollection() {
-  const db = await mongoDB();
-  if (!db) 
-    return null;
-  return db.collection(users_col_name);
+  const database = await connectDB();
+  return database.collection(process.env.USERS_TABLE_NAME);
 }
 
 async function postsCollection() {
-  const db = await mongoDB();
-  if (!db) 
-    return null;
-  return db.collection(posts_col_name);
+  const database = await connectDB();
+  return database.collection(process.env.POSTS_TABLE_NAME);
 }
 
 async function commentsCollection() {
-  const db = await mongoDB();
-  if (!db) 
-    return null;
-  return db.collection(comments_col_name);
+  const database = await connectDB();
+  return database.collection(process.env.COMMENTS_TABLE_NAME);
 }
 
-module.exports = {
-  usersCollection,
-  postsCollection,
-  commentsCollection,
-};
+export default { connectDB, usersCollection, postsCollection, commentsCollection };
