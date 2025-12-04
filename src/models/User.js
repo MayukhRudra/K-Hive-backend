@@ -20,9 +20,11 @@ class User {
       if (!collection) throw new Error("Database connection failed");
 
       // Check if user already exists
-      const existingUser = await collection.findOne({ gmailId: userData.gmailId });
+      const existingUser = await collection.findOne({
+        gmailId: userData.gmailId,
+      });
       if (existingUser) {
-        rediscon.usersCacheSet(existingUser._id,existingUser);
+        rediscon.usersCacheSet(existingUser._id, existingUser);
         return existingUser;
       }
 
@@ -35,11 +37,11 @@ class User {
         joinDate: newUser.joinDate,
         avatarLink: newUser.avatarLink,
         postIds: newUser.postIds,
-        commentIds: newUser.commentIds
+        commentIds: newUser.commentIds,
       });
 
       if (result.acknowledged) {
-        rediscon.usersCacheSet(newUser.userId,newUser);
+        rediscon.usersCacheSet(newUser.userId, newUser);
         return newUser;
       }
       throw new Error("Failed to create user");
@@ -65,14 +67,16 @@ class User {
 
   // Find user by User ID
   static async findByUserId(userId) {
-    const redisuser=rediscon.usersCacheGet(newUser.userId,newUser);
-    if (redisuser) return redisuser
+    const redisUser = await rediscon.usersCacheGet(userId);
+    if (redisUser) return redisUser;
+
     try {
       const collection = await mongocon.usersCollection();
       if (!collection) throw new Error("Database connection failed");
 
       const user = await collection.findOne({ userId });
-      rediscon.usersCacheSet(user.userId,user);
+      if (user) rediscon.usersCacheSet(userId, user);
+
       return user;
     } catch (err) {
       console.error("Error finding user by User ID:", err.message);
@@ -112,7 +116,7 @@ class User {
         { userId },
         { $addToSet: { postIds: postId } }
       );
-      
+
       if (result.modifiedCount > 0) {
         // Update cache if user exists in cache
         if (await rediscon.usersCacheExists(userId)) {
@@ -123,7 +127,7 @@ class User {
           }
         }
       }
-      
+
       return result.modifiedCount > 0;
     } catch (err) {
       console.error("Error adding post to user:", err.message);
@@ -141,7 +145,7 @@ class User {
         { userId },
         { $addToSet: { commentIds: commentId } }
       );
-      
+
       if (result.modifiedCount > 0) {
         // Update cache if user exists in cache
         if (await rediscon.usersCacheExists(userId)) {
@@ -152,7 +156,7 @@ class User {
           }
         }
       }
-      
+
       return result.modifiedCount > 0;
     } catch (err) {
       console.error("Error adding comment to user:", err.message);
@@ -170,7 +174,7 @@ class User {
         { userId },
         { $pull: { postIds: postId } }
       );
-      
+
       if (result.modifiedCount > 0) {
         // Update cache if user exists in cache
         if (await rediscon.usersCacheExists(userId)) {
@@ -184,7 +188,7 @@ class User {
           }
         }
       }
-      
+
       return result.modifiedCount > 0;
     } catch (err) {
       console.error("Error removing post from user:", err.message);
@@ -202,7 +206,7 @@ class User {
         { userId },
         { $pull: { commentIds: commentId } }
       );
-      
+
       if (result.modifiedCount > 0) {
         // Update cache if user exists in cache
         if (await rediscon.usersCacheExists(userId)) {
@@ -216,7 +220,7 @@ class User {
           }
         }
       }
-      
+
       return result.modifiedCount > 0;
     } catch (err) {
       console.error("Error removing comment from user:", err.message);

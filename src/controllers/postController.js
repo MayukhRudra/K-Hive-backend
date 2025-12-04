@@ -1,0 +1,485 @@
+import Post from "../models/Post.js";
+import User from "../models/User.js";
+
+// Create a new post
+export const createPost = async (req, res) => {
+  try {
+    const { title, content, tags } = req.body;
+    const userId = req.user.userId;
+
+    // Validation
+    if (!title || !content) {
+      return res.status(400).json({
+        success: false,
+        message: "Title and content are required",
+      });
+    }
+
+    if (title.length < 5 || title.length > 200) {
+      return res.status(400).json({
+        success: false,
+        message: "Title must be between 5 and 200 characters",
+      });
+    }
+
+    if (content.length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Content must be at least 10 characters",
+      });
+    }
+
+    // Create post
+    const postData = {
+      userId,
+      title: title.trim(),
+      content: content.trim(),
+      tags: tags || [],
+    };
+
+    const newPost = await Post.create(postData);
+
+    // Add post ID to user's postIds
+    await User.addPost(userId, newPost.postId);
+
+    res.status(201).json({
+      success: true,
+      message: "Post created successfully",
+      data: newPost,
+    });
+  } catch (err) {
+    console.error("Error in createPost:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create post",
+      error: err.message,
+    });
+  }
+};
+
+// Get all posts with pagination
+export const getAllPosts = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const sortBy = req.query.sortBy || "createdAt";
+    const order = req.query.order === "asc" ? 1 : -1;
+
+    // Validate pagination
+    if (page < 1 || limit < 1 || limit > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
+    const result = await Post.getAllPosts(page, limit, sortBy, order);
+
+    res.status(200).json({
+      success: true,
+      message: "Posts retrieved successfully",
+      data: result.posts,
+      pagination: result.pagination,
+    });
+  } catch (err) {
+    console.error("Error in getAllPosts:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve posts",
+      error: err.message,
+    });
+  }
+};
+
+// Get a single post by ID
+export const getPostById = async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    const post = await Post.findByPostId(postId);
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    // Increment view count
+    await Post.incrementViewCount(postId);
+
+    res.status(200).json({
+      success: true,
+      message: "Post retrieved successfully",
+      data: post,
+    });
+  } catch (err) {
+    console.error("Error in getPostById:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve post",
+      error: err.message,
+    });
+  }
+};
+
+// Get posts by user ID
+export const getPostsByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+
+    // Validate pagination
+    if (page < 1 || limit < 1 || limit > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
+    // Check if user exists
+    const user = await User.findByUserId(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const result = await Post.getPostsByUserId(userId, page, limit);
+
+    res.status(200).json({
+      success: true,
+      message: "User posts retrieved successfully",
+      data: result.posts,
+      pagination: result.pagination,
+    });
+  } catch (err) {
+    console.error("Error in getPostsByUserId:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve user posts",
+      error: err.message,
+    });
+  }
+};
+
+// Search posts
+export const searchPosts = async (req, res) => {
+  try {
+    const { q } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+
+    if (!q || q.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Search query must be at least 2 characters",
+      });
+    }
+
+    // Validate pagination
+    if (page < 1 || limit < 1 || limit > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
+    const result = await Post.searchPosts(q.trim(), page, limit);
+
+    res.status(200).json({
+      success: true,
+      message: "Search results retrieved successfully",
+      data: result.posts,
+      pagination: result.pagination,
+      query: q.trim(),
+    });
+  } catch (err) {
+    console.error("Error in searchPosts:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search posts",
+      error: err.message,
+    });
+  }
+};
+
+// Update a post
+export const updatePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { title, content, tags } = req.body;
+    const userId = req.user.userId;
+
+    // Check if post exists
+    const post = await Post.findByPostId(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    // Check if user owns the post
+    if (post.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to update this post",
+      });
+    }
+
+    // Validate update data
+    const updateData = {};
+    
+    if (title !== undefined) {
+      if (title.length < 5 || title.length > 200) {
+        return res.status(400).json({
+          success: false,
+          message: "Title must be between 5 and 200 characters",
+        });
+      }
+      updateData.title = title.trim();
+    }
+
+    if (content !== undefined) {
+      if (content.length < 10) {
+        return res.status(400).json({
+          success: false,
+          message: "Content must be at least 10 characters",
+        });
+      }
+      updateData.content = content.trim();
+    }
+
+    if (tags !== undefined) {
+      updateData.tags = tags;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid fields to update",
+      });
+    }
+
+    const updatedPost = await Post.updatePost(postId, updateData);
+
+    res.status(200).json({
+      success: true,
+      message: "Post updated successfully",
+      data: updatedPost,
+    });
+  } catch (err) {
+    console.error("Error in updatePost:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update post",
+      error: err.message,
+    });
+  }
+};
+
+// Delete a post
+export const deletePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const userId = req.user.userId;
+
+    // Check if post exists
+    const post = await Post.findByPostId(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    // Check if user owns the post
+    if (post.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to delete this post",
+      });
+    }
+
+    // Delete the post
+    const deleted = await Post.deletePost(postId);
+
+    if (deleted) {
+      // Remove post ID from user's postIds
+      await User.removePost(userId, postId);
+
+      res.status(200).json({
+        success: true,
+        message: "Post deleted successfully",
+      });
+    } else {
+      throw new Error("Failed to delete post");
+    }
+  } catch (err) {
+    console.error("Error in deletePost:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete post",
+      error: err.message,
+    });
+  }
+};
+
+// Upvote a post
+export const upvotePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    // Check if post exists
+    const post = await Post.findByPostId(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    const upvoted = await Post.upvote(postId);
+
+    if (upvoted) {
+      const updatedPost = await Post.findByPostId(postId);
+      res.status(200).json({
+        success: true,
+        message: "Post upvoted successfully",
+        data: {
+          postId,
+          upvotes: updatedPost.upvotes,
+        },
+      });
+    } else {
+      throw new Error("Failed to upvote post");
+    }
+  } catch (err) {
+    console.error("Error in upvotePost:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to upvote post",
+      error: err.message,
+    });
+  }
+};
+
+// Downvote a post
+export const downvotePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    // Check if post exists
+    const post = await Post.findByPostId(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    const downvoted = await Post.downvote(postId);
+
+    if (downvoted) {
+      const updatedPost = await Post.findByPostId(postId);
+      res.status(200).json({
+        success: true,
+        message: "Post downvoted successfully",
+        data: {
+          postId,
+          downvotes: updatedPost.downvotes,
+        },
+      });
+    } else {
+      throw new Error("Failed to downvote post");
+    }
+  } catch (err) {
+    console.error("Error in downvotePost:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to downvote post",
+      error: err.message,
+    });
+  }
+};
+
+// Toggle pin status (admin only - you can add admin middleware later)
+export const togglePinPost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    // Check if post exists
+    const post = await Post.findByPostId(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    const toggled = await Post.togglePin(postId);
+
+    if (toggled) {
+      const updatedPost = await Post.findByPostId(postId);
+      res.status(200).json({
+        success: true,
+        message: `Post ${updatedPost.isPinned ? "pinned" : "unpinned"} successfully`,
+        data: {
+          postId,
+          isPinned: updatedPost.isPinned,
+        },
+      });
+    } else {
+      throw new Error("Failed to toggle pin status");
+    }
+  } catch (err) {
+    console.error("Error in togglePinPost:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to toggle pin status",
+      error: err.message,
+    });
+  }
+};
+
+// Toggle lock status (admin only - you can add admin middleware later)
+export const toggleLockPost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    // Check if post exists
+    const post = await Post.findByPostId(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    const toggled = await Post.toggleLock(postId);
+
+    if (toggled) {
+      const updatedPost = await Post.findByPostId(postId);
+      res.status(200).json({
+        success: true,
+        message: `Post ${updatedPost.isLocked ? "locked" : "unlocked"} successfully`,
+        data: {
+          postId,
+          isLocked: updatedPost.isLocked,
+        },
+      });
+    } else {
+      throw new Error("Failed to toggle lock status");
+    }
+  } catch (err) {
+    console.error("Error in toggleLockPost:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to toggle lock status",
+      error: err.message,
+    });
+  }
+};

@@ -49,6 +49,8 @@ async function redisSet(key, value, ttl = null) {
   if (!client) return false;
 
   try {
+    console.log(`[CACHE SET] ${key} (ttl=${ttl || "none"})`);
+
     if (ttl) return await client.set(key, value, "EX", ttl);
     return await client.set(key, value);
   } catch (err) {
@@ -56,6 +58,7 @@ async function redisSet(key, value, ttl = null) {
     return false;
   }
 }
+
 
 async function redisMSet(pairs, ttl = null) {
   const client = await redisClient();
@@ -89,12 +92,21 @@ async function redisGet(key) {
   if (!client) return null;
 
   try {
-    return await client.get(key);
+    const value = await client.get(key);
+
+    if (value) {
+      console.log(`[CACHE HIT] ${key}`);
+    } else {
+      console.log(`[CACHE MISS] ${key}`);
+    }
+
+    return value;
   } catch (err) {
     console.error("Redis GET error:", err.message);
     return null;
   }
 }
+
 
 async function redisExists(key) {
   const client = await redisClient();
