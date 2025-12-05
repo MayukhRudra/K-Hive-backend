@@ -149,17 +149,60 @@ class Post {
           };
         }
 
-        // Fetch full post details for paginated post IDs using findByPostId
-        const postPromises = paginatedPostIds.map(postId => 
-          this.findByPostId(postId)
-        );
-        const posts = await Promise.all(postPromises);
+        // Check which posts exist in Redis cache
+        const cacheCheckPromises = paginatedPostIds.map(async postId => ({
+          postId,
+          inCache: await rediscon.postsCacheExists(postId)
+        }));
+        const cacheChecks = await Promise.all(cacheCheckPromises);
 
-        // Filter out any null/undefined posts
-        const validPosts = posts.filter(Boolean);
+        // Separate cached and non-cached post IDs
+        const cachedPostIds = cacheChecks
+          .filter(check => check.inCache)
+          .map(check => check.postId);
+        
+        const nonCachedPostIds = cacheChecks
+          .filter(check => !check.inCache)
+          .map(check => check.postId);
+
+        // Fetch cached posts from Redis
+        const cachedPostsPromises = cachedPostIds.map(postId =>
+          rediscon.postsCacheGet(postId)
+        );
+        const cachedPosts = await Promise.all(cachedPostsPromises);
+
+        let nonCachedPosts = [];
+        
+        // Fetch non-cached posts from MongoDB
+        if (nonCachedPostIds.length > 0) {
+          const collection = await mongocon.postsCollection();
+          if (!collection) throw new Error("Database connection failed");
+
+          nonCachedPosts = await collection
+            .find({ postId: { $in: nonCachedPostIds } })
+            .toArray();
+
+          // Cache the newly fetched posts
+          if (nonCachedPosts.length > 0) {
+            const cachePairs = {};
+            nonCachedPosts.forEach((post) => {
+              cachePairs[post.postId] = post;
+            });
+            await rediscon.postsCacheMSet(cachePairs);
+          }
+        }
+
+        // Combine cached and non-cached posts
+        const allPosts = [...cachedPosts, ...nonCachedPosts];
+
+        // Sort posts in the same order as paginatedPostIds
+        const postsMap = new Map(allPosts.map(post => [post.postId, post]));
+        const orderedPosts = paginatedPostIds
+          .map(id => postsMap.get(id))
+          .filter(Boolean);
 
         return {
-          posts: validPosts,
+          posts: orderedPosts,
           pagination: {
             page,
             limit,
@@ -197,6 +240,15 @@ class Post {
       const posts = result[0].posts;
       const total = result[0].totalCount[0]?.count || 0;
 
+      // Cache fetched posts
+      if (posts.length > 0) {
+        const cachePairs = {};
+        posts.forEach((post) => {
+          cachePairs[post.postId] = post;
+        });
+        await rediscon.postsCacheMSet(cachePairs);
+      }
+
       return {
         posts,
         pagination: {
@@ -211,7 +263,6 @@ class Post {
       throw err;
     }
   }
-
  
   // Search posts by title or tags
   static async searchPosts(query, page = 1, limit = 10) {
