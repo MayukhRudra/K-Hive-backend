@@ -305,7 +305,7 @@ export const deletePost = async (req, res) => {
     }
 
     // Delete the post
-    const deleted = await Post.deletePost(postId);
+    const deleted = await Post.deletePost(postId,userId);
 
     if (deleted) {
       // Remove post ID from user's postIds

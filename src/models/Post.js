@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import mongocon from "../config/mongocon.js";
 import rediscon from "../config/rediscon.js";
+import User from "./User.js"
 
 class Post {
   constructor(data) {
@@ -44,7 +45,8 @@ class Post {
       });
 
       if (result.acknowledged) {
-        await rediscon.postsCacheSet(newPost.postId, newPost);
+        rediscon.postsCacheSet(newPost.postId, newPost);
+        User.addPost(newPost.userId,newPost.postId)
         return newPost;
       }
       throw new Error("Failed to create post");
@@ -80,18 +82,27 @@ class Post {
       if (!collection) throw new Error("Database connection failed");
 
       const skip = (page - 1) * limit;
-      const sortOptions = { [sortBy]: order };
 
-      const posts = await collection
-        .find({})
-        .sort(sortOptions)
-        .skip(skip)
-        .limit(limit)
-        .toArray();
+      // Use aggregation pipeline with $facet to get posts and count in one query
+      const result = await collection.aggregate([
+        {
+          $facet: {
+            posts: [
+              { $sort: { [sortBy]: order } },
+              { $skip: skip },
+              { $limit: limit }
+            ],
+            totalCount: [
+              { $count: "count" }
+            ]
+          }
+        }
+      ]).toArray();
 
-      const total = await collection.countDocuments({});
+      const posts = result[0].posts;
+      const total = result[0].totalCount[0]?.count || 0;
 
-      // Cache fetched posts
+      // Cache fetched posts (this still happens on your server, but unavoidable for caching)
       if (posts.length > 0) {
         const cachePairs = {};
         posts.forEach((post) => {
@@ -118,19 +129,73 @@ class Post {
   // Get posts by user ID
   static async getPostsByUserId(userId, page = 1, limit = 10) {
     try {
+      // First, try to get postIds from User collection
+      const userPosts = await User.getPosts(userId);
+      
+      if (userPosts.total > 0) {
+        // User exists and has posts in their postIds array
+        const skip = (page - 1) * limit;
+        const paginatedPostIds = userPosts.posts.slice(skip, skip + limit);
+
+        if (paginatedPostIds.length === 0) {
+          return {
+            posts: [],
+            pagination: {
+              page,
+              limit,
+              total: userPosts.total,
+              totalPages: Math.ceil(userPosts.total / limit),
+            },
+          };
+        }
+
+        // Fetch full post details for paginated post IDs using findByPostId
+        const postPromises = paginatedPostIds.map(postId => 
+          this.findByPostId(postId)
+        );
+        const posts = await Promise.all(postPromises);
+
+        // Filter out any null/undefined posts
+        const validPosts = posts.filter(Boolean);
+
+        return {
+          posts: validPosts,
+          pagination: {
+            page,
+            limit,
+            total: userPosts.total,
+            totalPages: Math.ceil(userPosts.total / limit),
+          },
+        };
+      }
+
+      // Fallback: User doesn't exist or postIds array is empty
+      // Query posts collection directly
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
 
       const skip = (page - 1) * limit;
 
-      const posts = await collection
-        .find({ userId })
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .toArray();
+      const result = await collection.aggregate([
+        {
+          $match: { userId }
+        },
+        {
+          $facet: {
+            posts: [
+              { $sort: { createdAt: -1 } },
+              { $skip: skip },
+              { $limit: limit }
+            ],
+            totalCount: [
+              { $count: "count" }
+            ]
+          }
+        }
+      ]).toArray();
 
-      const total = await collection.countDocuments({ userId });
+      const posts = result[0].posts;
+      const total = result[0].totalCount[0]?.count || 0;
 
       return {
         posts,
@@ -147,6 +212,7 @@ class Post {
     }
   }
 
+ 
   // Search posts by title or tags
   static async searchPosts(query, page = 1, limit = 10) {
     try {
@@ -223,7 +289,13 @@ class Post {
       );
 
       if (result.modifiedCount > 0) {
-        await rediscon.postsCacheDel(postId);
+        if (await rediscon.postsCacheExists(postId)) {
+          const cachedPost = await rediscon.postsCacheGet(postId);
+          if (cachedPost) {
+            cachedPost.viewCount = (cachedPost.viewCount || 0) + 1;
+            await rediscon.postsCacheSet(postId, cachedPost);
+          }
+        }
       }
 
       return result.modifiedCount > 0;
@@ -289,7 +361,13 @@ class Post {
       );
 
       if (result.modifiedCount > 0) {
-        await rediscon.postsCacheDel(postId);
+        if (await rediscon.postsCacheExists(postId)) {
+          const cachedPost = await rediscon.postsCacheGet(postId);
+          if (cachedPost && !cachedPost.commentIds.includes(commentId)) {
+            cachedPost.commentIds.push(commentId);
+            await rediscon.postsCacheSet(postId, cachedPost);
+          }
+        }
       }
 
       return result.modifiedCount > 0;
@@ -311,7 +389,16 @@ class Post {
       );
 
       if (result.modifiedCount > 0) {
-        await rediscon.postsCacheDel(postId);
+        if (await rediscon.postsCacheExists(postId)) {
+          const cachedPost = await rediscon.postsCacheGet(postId);
+          if (cachedPost && cachedPost.commentIds) {
+            const index = cachedPost.commentIds.indexOf(commentId);
+            if (index > -1) {
+              cachedPost.commentIds.splice(index, 1);
+            }
+            await rediscon.postsCacheSet(postId, cachedPost);
+          }
+        }
       }
 
       return result.modifiedCount > 0;
@@ -372,14 +459,14 @@ class Post {
   }
 
   // Delete post
-  static async deletePost(postId) {
+  static async deletePost(postId,userId) {
     try {
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
 
       const result = await collection.deleteOne({ postId });
       await rediscon.postsCacheDel(postId);
-
+      await User.removePost(userId,postId)
       return result.deletedCount > 0;
     } catch (err) {
       console.error("Error deleting post:", err.message);

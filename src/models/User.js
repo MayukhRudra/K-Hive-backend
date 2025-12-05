@@ -11,6 +11,7 @@ class User {
     this.avatarLink = data.avatarLink || null;
     this.postIds = data.postIds || [];
     this.commentIds = data.commentIds || [];
+    this.role = data.role || "user"
   }
 
   // Create a new user
@@ -38,6 +39,7 @@ class User {
         avatarLink: newUser.avatarLink,
         postIds: newUser.postIds,
         commentIds: newUser.commentIds,
+        role: "user"
       });
 
       if (result.acknowledged) {
@@ -131,6 +133,33 @@ class User {
       return result.modifiedCount > 0;
     } catch (err) {
       console.error("Error adding post to user:", err.message);
+      throw err;
+    }
+  }
+
+  static async getPosts(userId) {
+    try {
+      const collection = await mongocon.usersCollection();
+      if (!collection) throw new Error("Database connection failed");
+
+      const user = await collection.findOne(
+        { _id: ObjectId.createFromHexString(userId) },
+        { projection: { postIds: 1, _id: 0 } }
+      );
+
+      if (!user) {
+        return {
+          posts: [],
+          total: 0
+        };
+      }
+
+      return {
+        posts: user.postIds || [],
+        total: user.postIds ? user.postIds.length : 0
+      };
+    } catch (err) {
+      console.error("Error getting posts from user:", err.message);
       throw err;
     }
   }
