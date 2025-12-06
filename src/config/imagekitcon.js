@@ -1,4 +1,5 @@
 import ImageKit from 'imagekit';
+import { randomUUID } from 'crypto';
 
 let imagekit;
 
@@ -18,6 +19,14 @@ function getImageKitInstance() {
   }
 }
 
+function getUUID() {
+  const uuid = randomUUID();
+  // Convert UUID string to bytes then to base64
+  const bytes = Buffer.from(uuid.replace(/-/g, ''), 'hex');
+  const base64 = bytes.toString('base64url'); // base64url automatically removes padding
+  return base64;
+}
+
 export function getPresignedUploadUrl(expireInSeconds = 60, folder = 'k-hive') {
   const imagekitInstance = getImageKitInstance();
   
@@ -26,12 +35,16 @@ export function getPresignedUploadUrl(expireInSeconds = 60, folder = 'k-hive') {
     throw new Error("ImageKit not initialized");
   }
 
-  const authParams = imagekitInstance.getAuthenticationParameters({
-    expire: expireInSeconds
-  });
+  // Generate a unique token using UUID
+  const token = getUUID();
+  
+  // Calculate expire timestamp (current time + expireInSeconds)
+  const expire = Math.floor(Date.now() / 1000) + expireInSeconds;
+
+  const authParams = imagekitInstance.getAuthenticationParameters(token, expire);
 
   return {
-    token: authParams.token,
+    token: token,
     expire: authParams.expire,
     signature: authParams.signature,
     publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
@@ -70,7 +83,7 @@ export async function deleteFileByUrl(fileUrl) {
     const fileId = files[0].fileId;
 
     // Delete the file
-    const result = await imagekitInstance.deleteFile(fileId);
+    await imagekitInstance.deleteFile(fileId);
     
     return true;
   } catch (err) {
