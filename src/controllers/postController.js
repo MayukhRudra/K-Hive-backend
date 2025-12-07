@@ -4,7 +4,7 @@ import User from "../models/User.js";
 // Create a new post
 export const createPost = async (req, res) => {
   try {
-    const { title, content, tags } = req.body;
+    const { title, content, tags, media } = req.body;
     const userId = req.user.userId;
 
     // Validation
@@ -29,15 +29,26 @@ export const createPost = async (req, res) => {
       });
     }
 
+    // Validate media if present
+    if (media && !Array.isArray(media)) {
+      return res.status(400).json({
+        success: false,
+        message: "Media must be an array",
+      });
+    }
+
     // Create post
     const postData = {
       userId,
       title: title.trim(),
       content: content.trim(),
       tags: tags || [],
+      media: media || []
     };
 
     const newPost = await Post.create(postData);
+
+    console.log('Post created successfully:', newPost.postId);
 
     // Add post ID to user's postIds
     await User.addPost(userId, newPost.postId);
@@ -48,7 +59,8 @@ export const createPost = async (req, res) => {
       data: newPost,
     });
   } catch (err) {
-    console.error("Error in createPost:", err.message);
+    console.error("Error in createPost:", err);
+    console.error("Error stack:", err.stack);
     res.status(500).json({
       success: false,
       message: "Failed to create post",
