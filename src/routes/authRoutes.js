@@ -7,6 +7,7 @@ import {
   logout,
   checkAuth,
   refreshToken,
+  updateUser,
 } from "../controllers/authController.js";
 
 const router = express.Router();
@@ -30,6 +31,8 @@ router.get(
 );
 
 router.get("/user", isAuthenticated, getCurrentUser);
+
+router.put("/user", isAuthenticated, updateUser);
 
 router.get("/check", checkAuth);
 

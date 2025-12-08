@@ -136,3 +136,67 @@ export const refreshToken = async (req, res) => {
     });
   }
 };
+
+// Update user (only name)
+export const updateUser = async (req, res) => {
+  try {
+    const { name } = req.body;
+    const userId = req.user.userId; // Get userId from authenticated user
+
+    // Validate that name is provided
+    if (name === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid fields to update",
+      });
+    }
+
+    // Validate name
+    if (typeof name !== 'string' || name.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Name must be at least 2 characters",
+      });
+    }
+
+    if (name.trim().length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Name must not exceed 100 characters",
+      });
+    }
+
+    // Update user
+    const updateData = {
+      name: name.trim()
+    };
+
+    const updatedUser = await User.updateUser(userId, updateData);
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found or update failed",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "User updated successfully",
+      user: {
+        userId: updatedUser.userId,
+        name: updatedUser.name,
+        gmailId: updatedUser.gmailId,
+        avatarLink: updatedUser.avatarLink,
+        joinDate: updatedUser.joinDate,
+      },
+    });
+  } catch (err) {
+    console.error("Error in updateUser:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update user",
+      error: err.message,
+    });
+  }
+};
