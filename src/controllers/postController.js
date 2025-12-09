@@ -104,7 +104,6 @@ export const getAllPosts = async (req, res) => {
   }
 };
 
-// Get a single post by ID
 export const getPostById = async (req, res) => {
   try {
     const { postId } = req.params;
@@ -118,13 +117,17 @@ export const getPostById = async (req, res) => {
       });
     }
 
+    // Populate user data
+    const populatedPosts = await Post.populateUserData([post]);
+    const populatedPost = populatedPosts[0];
+
     // Increment view count
     await Post.incrementViewCount(postId);
 
     res.status(200).json({
       success: true,
       message: "Post retrieved successfully",
-      data: post,
+      data: populatedPost,
     });
   } catch (err) {
     console.error("Error in getPostById:", err.message);
@@ -136,7 +139,7 @@ export const getPostById = async (req, res) => {
   }
 };
 
-// Get posts by user ID
+// Get posts by user ID - UPDATED VERSION
 export const getPostsByUserId = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -162,10 +165,13 @@ export const getPostsByUserId = async (req, res) => {
 
     const result = await Post.getPostsByUserId(userId, page, limit);
 
+    // Populate user data
+    const populatedPosts = await Post.populateUserData(result.posts);
+
     res.status(200).json({
       success: true,
       message: "User posts retrieved successfully",
-      data: result.posts,
+      data: populatedPosts,
       pagination: result.pagination,
     });
   } catch (err) {

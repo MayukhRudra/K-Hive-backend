@@ -146,7 +146,8 @@ class Post {
           userMap.set(userId, {
             userId: cachedUser.userId,
             name: cachedUser.name,
-            avatarLink: cachedUser.avatarLink
+            avatarLink: cachedUser.avatarLink,
+            role: cachedUser.role
           });
         } else {
           missingUserIds.push(userId);
@@ -168,7 +169,8 @@ class Post {
             const userData = {
               userId: user.userId,
               name: user.name,
-              avatarLink: user.avatarLink
+              avatarLink: user.avatarLink,
+              role: user.role
             };
             userMap.set(user.userId, userData);
             // Cache the full user object (not just the projected fields)
