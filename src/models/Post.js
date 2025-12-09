@@ -4,6 +4,7 @@ import rediscon from "../config/rediscon.js";
 import { deleteFileByUrl } from "../config/imagekitcon.js";
 import User from "./User.js"
 import PrefixSearchService from '../services/prefixSearchService.js';
+import Vote from "./Vote.js"
 
 class Post {
   constructor(data) {
@@ -130,7 +131,7 @@ class Post {
     }
   }
 
-  // Get all posts with pagination - OPTIMIZED VERSION
+  // Populate user data for posts
   static async populateUserData(posts) {
     if (!posts || posts.length === 0) return posts;
 
@@ -173,7 +174,6 @@ class Post {
               avatarLink: user.avatarLink
             };
             userMap.set(user.userId, userData);
-            // Cache the full user object (not just the projected fields)
             cachePairs[user.userId] = user;
           });
           
@@ -197,87 +197,157 @@ class Post {
     }
   }
 
-// Update getAllPosts to use population
-static async getAllPosts(page = 1, limit = 10, sortBy = "createdAt", order = -1) {
-  try {
-    const collection = await mongocon.postsCollection();
-    if (!collection) throw new Error("Database connection failed");
-
-    const feedKey = Post.getFeedCacheKey(sortBy, order);
-    const start = (page - 1) * limit;
-    const end = start + limit - 1;
-
-    let postIds = await rediscon.feedCacheRange(feedKey, start, end);
-    
-    if (!postIds || postIds.length === 0) {
-      console.log(`[FEED CACHE] Miss for ${feedKey}, rebuilding...`);
-      await Post.rebuildFeedCache(sortBy, order, 50);
-      postIds = await rediscon.feedCacheRange(feedKey, start, end);
+  // Populate vote data for posts
+  static async populateVoteData(posts, userId) {
+    if (!posts || posts.length === 0 || !userId) {
+      // If no userId, return posts with vote: 0
+      return posts.map(post => ({ ...post, vote: 0 }));
     }
 
-    if (!postIds || postIds.length === 0) {
-      console.log(`[FEED CACHE] Fallback to DB query`);
-      const result = await Post.getAllPostsFromDB(page, limit, sortBy, order);
-      // Populate user data before returning
-      result.posts = await Post.populateUserData(result.posts);
-      return result;
-    }
-
-    const posts = [];
-    const missingIds = [];
-
-    for (const postId of postIds) {
-      const cachedPost = await rediscon.postsCacheGet(postId);
-      if (cachedPost) {
-        posts.push(cachedPost);
-      } else {
-        missingIds.push(postId);
+    try {
+      // Get unique post IDs
+      const postIds = [...new Set(posts.map(post => post.postId))];
+      
+      const voteMap = new Map();
+      const missingVoteIds = [];
+      
+      // Check cache first
+      for (const postId of postIds) {
+        const voteId = Vote.getVoteKey(postId, userId);
+        const cachedVote = await rediscon.postsCacheGet(`vote:${voteId}`);
+        if (cachedVote) {
+          voteMap.set(postId, cachedVote.vote);
+        } else {
+          missingVoteIds.push(postId);
+        }
       }
+      
+      // Fetch missing votes from database
+      if (missingVoteIds.length > 0) {
+        const collection = await mongocon.postvoteCollection();
+        if (collection) {
+          const voteIds = missingVoteIds.map(postId => Vote.getVoteKey(postId, userId));
+          const votes = await collection
+            .find({ voteId: { $in: voteIds } })
+            .toArray();
+          
+          // Cache the fetched votes and add to map
+          for (const vote of votes) {
+            voteMap.set(vote.postId, vote.vote);
+            await rediscon.postsCacheSet(`vote:${vote.voteId}`, vote);
+          }
+        }
+      }
+      
+      // Populate posts with vote data
+      return posts.map(post => ({
+        ...post,
+        vote: voteMap.get(post.postId) || 0
+      }));
+    } catch (err) {
+      console.error("Error populating vote data:", err.message);
+      // Return posts with default vote: 0 on error
+      return posts.map(post => ({ ...post, vote: 0 }));
     }
-
-    if (missingIds.length > 0) {
-      const missingPosts = await collection
-        .find({ postId: { $in: missingIds } })
-        .toArray();
-
-      const cachePairs = {};
-      missingPosts.forEach((post) => {
-        cachePairs[post.postId] = post;
-        posts.push(post);
-      });
-      await rediscon.postsCacheMSet(cachePairs);
-    }
-
-    const postsMap = new Map(posts.map(p => [p.postId, p]));
-    const orderedPosts = postIds
-      .map(id => postsMap.get(id))
-      .filter(Boolean);
-
-    // Populate user data
-    const populatedPosts = await Post.populateUserData(orderedPosts);
-
-    const totalKey = `posts:total:${sortBy}`;
-    let total = await rediscon.feedCacheGetTotal(totalKey);
-    
-    if (!total) {
-      total = await collection.countDocuments({});
-      await rediscon.feedCacheSetTotal(totalKey, total, 300);
-    }
-
-    return {
-      posts: populatedPosts,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  } catch (err) {
-    console.error("Error getting all posts:", err.message);
-    throw err;
   }
-}
+
+  // Populate both user and vote data
+  static async populatePostData(posts, userId = null) {
+    if (!posts || posts.length === 0) return posts;
+
+    try {
+      // Populate user data
+      let populatedPosts = await Post.populateUserData(posts);
+      
+      // Populate vote data
+      populatedPosts = await Post.populateVoteData(populatedPosts, userId);
+      
+      return populatedPosts;
+    } catch (err) {
+      console.error("Error populating post data:", err.message);
+      return posts;
+    }
+  }
+
+  // Get all posts with pagination - OPTIMIZED VERSION
+  static async getAllPosts(page = 1, limit = 10, sortBy = "createdAt", order = -1, userId = null) {
+    try {
+      const collection = await mongocon.postsCollection();
+      if (!collection) throw new Error("Database connection failed");
+
+      const feedKey = Post.getFeedCacheKey(sortBy, order);
+      const start = (page - 1) * limit;
+      const end = start + limit - 1;
+
+      let postIds = await rediscon.feedCacheRange(feedKey, start, end);
+      
+      if (!postIds || postIds.length === 0) {
+        console.log(`[FEED CACHE] Miss for ${feedKey}, rebuilding...`);
+        await Post.rebuildFeedCache(sortBy, order, 50);
+        postIds = await rediscon.feedCacheRange(feedKey, start, end);
+      }
+
+      if (!postIds || postIds.length === 0) {
+        console.log(`[FEED CACHE] Fallback to DB query`);
+        const result = await Post.getAllPostsFromDB(page, limit, sortBy, order, userId);
+        return result;
+      }
+
+      const posts = [];
+      const missingIds = [];
+
+      for (const postId of postIds) {
+        const cachedPost = await rediscon.postsCacheGet(postId);
+        if (cachedPost) {
+          posts.push(cachedPost);
+        } else {
+          missingIds.push(postId);
+        }
+      }
+
+      if (missingIds.length > 0) {
+        const missingPosts = await collection
+          .find({ postId: { $in: missingIds } })
+          .toArray();
+
+        const cachePairs = {};
+        missingPosts.forEach((post) => {
+          cachePairs[post.postId] = post;
+          posts.push(post);
+        });
+        await rediscon.postsCacheMSet(cachePairs);
+      }
+
+      const postsMap = new Map(posts.map(p => [p.postId, p]));
+      const orderedPosts = postIds
+        .map(id => postsMap.get(id))
+        .filter(Boolean);
+
+      // Populate user and vote data
+      const populatedPosts = await Post.populatePostData(orderedPosts, userId);
+
+      const totalKey = `posts:total:${sortBy}`;
+      let total = await rediscon.feedCacheGetTotal(totalKey);
+      
+      if (!total) {
+        total = await collection.countDocuments({});
+        await rediscon.feedCacheSetTotal(totalKey, total, 300);
+      }
+
+      return {
+        posts: populatedPosts,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    } catch (err) {
+      console.error("Error getting all posts:", err.message);
+      throw err;
+    }
+  }
 
 // fallback func getAllPostsFromDB
 static async getAllPostsFromDB(page = 1, limit = 10, sortBy = "createdAt", order = -1) {
@@ -673,47 +743,140 @@ static async getAllPostsFromDB(page = 1, limit = 10, sortBy = "createdAt", order
   }
 
   // Add upvote
-  static async upvote(postId) {
+static async upvote(postId) {
+  try {
+    const collection = await mongocon.postsCollection();
+    if (!collection) throw new Error("Database connection failed");
+
+    const result = await collection.updateOne(
+      { postId },
+      { $inc: { upvotes: 1 } }
+    );
+
+    if (result.modifiedCount > 0) {
+      // Update cache instead of deleting
+      if (await rediscon.postsCacheExists(postId)) {
+        const cachedPost = await rediscon.postsCacheGet(postId);
+        if (cachedPost) {
+          cachedPost.upvotes = (cachedPost.upvotes || 0) + 1;
+          await rediscon.postsCacheSet(postId, cachedPost);
+        }
+      } else {
+        // If not in cache, fetch and cache the updated post
+        const updatedPost = await collection.findOne({ postId });
+        if (updatedPost) {
+          await rediscon.postsCacheSet(postId, updatedPost);
+        }
+      }
+    }
+
+    return result.modifiedCount > 0;
+  } catch (err) {
+    console.error("Error upvoting post:", err.message);
+    throw err;
+  }
+}
+
+  // Add downvote
+  static async downvote(postId) {
+  try {
+    const collection = await mongocon.postsCollection();
+    if (!collection) throw new Error("Database connection failed");
+
+    const result = await collection.updateOne(
+      { postId },
+      { $inc: { downvotes: 1 } }
+    );
+
+    if (result.modifiedCount > 0) {
+      // Update cache instead of deleting
+      if (await rediscon.postsCacheExists(postId)) {
+        const cachedPost = await rediscon.postsCacheGet(postId);
+        if (cachedPost) {
+          cachedPost.downvotes = (cachedPost.downvotes || 0) + 1;
+          await rediscon.postsCacheSet(postId, cachedPost);
+        }
+      } else {
+        // If not in cache, fetch and cache the updated post
+        const updatedPost = await collection.findOne({ postId });
+        if (updatedPost) {
+          await rediscon.postsCacheSet(postId, updatedPost);
+        }
+      }
+    }
+
+    return result.modifiedCount > 0;
+  } catch (err) {
+    console.error("Error downvoting post:", err.message);
+    throw err;
+  }
+}
+  // Remove upvote (decrement upvote count)
+  static async removeUpvote(postId) {
     try {
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
 
       const result = await collection.updateOne(
-        { postId },
-        { $inc: { upvotes: 1 } }
+        { postId, upvotes: { $gt: 0 } }, // Ensure upvotes don't go negative
+        { $inc: { upvotes: -1 } }
       );
 
       if (result.modifiedCount > 0) {
-        await rediscon.postsCacheDel(postId);
-        // Invalidate feed caches for "popular" sorting
-        await rediscon.feedCacheClear(Post.getFeedCacheKey("upvotes", -1));
+        // Update cache instead of deleting
+        if (await rediscon.postsCacheExists(postId)) {
+          const cachedPost = await rediscon.postsCacheGet(postId);
+          if (cachedPost && cachedPost.upvotes > 0) {
+            cachedPost.upvotes = cachedPost.upvotes - 1;
+            await rediscon.postsCacheSet(postId, cachedPost);
+          }
+        } else {
+          // If not in cache, fetch and cache the updated post
+          const updatedPost = await collection.findOne({ postId });
+          if (updatedPost) {
+            await rediscon.postsCacheSet(postId, updatedPost);
+          }
+        }
       }
 
       return result.modifiedCount > 0;
     } catch (err) {
-      console.error("Error upvoting post:", err.message);
+      console.error("Error removing upvote from post:", err.message);
       throw err;
     }
   }
 
-  // Add downvote
-  static async downvote(postId) {
+  // Remove downvote (decrement downvote count)
+  static async removeDownvote(postId) {
     try {
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
 
       const result = await collection.updateOne(
-        { postId },
-        { $inc: { downvotes: 1 } }
+        { postId, downvotes: { $gt: 0 } }, // Ensure downvotes don't go negative
+        { $inc: { downvotes: -1 } }
       );
 
       if (result.modifiedCount > 0) {
-        await rediscon.postsCacheDel(postId);
+        // Update cache instead of deleting
+        if (await rediscon.postsCacheExists(postId)) {
+          const cachedPost = await rediscon.postsCacheGet(postId);
+          if (cachedPost && cachedPost.downvotes > 0) {
+            cachedPost.downvotes = cachedPost.downvotes - 1;
+            await rediscon.postsCacheSet(postId, cachedPost);
+          }
+        } else {
+          // If not in cache, fetch and cache the updated post
+          const updatedPost = await collection.findOne({ postId });
+          if (updatedPost) {
+            await rediscon.postsCacheSet(postId, updatedPost);
+          }
+        }
       }
 
       return result.modifiedCount > 0;
     } catch (err) {
-      console.error("Error downvoting post:", err.message);
+      console.error("Error removing downvote from post:", err.message);
       throw err;
     }
   }
@@ -864,6 +1027,7 @@ static async getAllPostsFromDB(page = 1, limit = 10, sortBy = "createdAt", order
         await rediscon.feedCacheClear("posts:total:upvotes");
 
         PrefixSearchService.removePostIndex(post);
+        Vote.deleteVotesByPostId(postId)
       }
       
       return result.deletedCount > 0;
