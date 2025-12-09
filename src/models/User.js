@@ -174,6 +174,48 @@ class User {
     }
   }
 
+  // Toggle ban status for user
+  static async toggleBanUser(userId) {
+    try {
+      const collection = await mongocon.usersCollection();
+      if (!collection) throw new Error("Database connection failed");
+
+      const user = await User.findByUserId(userId);
+      if (!user) throw new Error("User Does not Exists");
+
+      // Prevent banning admin users
+      if (user.role === "admin") {
+        throw new Error("Cannot ban admin users");
+      }
+      
+      let newRole;
+      if (user.role.endsWith("-ban")) {
+        // If currently banned, restore to original role
+        newRole = user.role.replace("-ban", "");
+      } else {
+        // If not banned, append -ban to current role
+        newRole = `${user.role}-ban`;
+      }
+
+      const result = await collection.updateOne(
+        { userId },
+        { $set: { role: newRole } }
+      );
+
+      if (result.modifiedCount > 0) {
+        // Invalidate cache and fetch updated user
+        await rediscon.usersCacheDel(userId);
+        const updatedUser = await User.findByUserId(userId);
+        return updatedUser;
+      }
+
+      return null;
+    } catch (err) {
+      console.error("Error toggling ban status:", err.message);
+      throw err;
+    }
+  }
+
   // Add comment ID to user's commentIds array
   static async addComment(userId, commentId) {
     try {
@@ -276,5 +318,7 @@ class User {
     }
   }
 }
+
+
 
 export default User;

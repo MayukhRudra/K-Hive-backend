@@ -115,64 +115,44 @@ export const deleteAnyPost = async (req, res) => {
 };
 
 // Ban/Unban a user
-// export const toggleBanUser = async (req, res) => {
-//   try {
-//     const { userId } = req.params;
+export const toggleBanUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
 
-//     // Prevent self-ban
-//     if (req.user.userId === userId) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "You cannot ban yourself",
-//       });
-//     }
+    // Prevent self-ban
+    if (req.user.userId === userId) {
+      return res.status(400).json({
+        success: false,
+        message: "You cannot ban yourself",
+      });
+    }
+    // Toggle ban status
+    const updatedUser = await User.toggleBanUser(userId);
 
-//     // Check if user exists
-//     const user = await User.findByUserId(userId);
-//     if (!user) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "User not found",
-//       });
-//     }
-
-//     // Prevent banning other admins
-//     if (user.role === "admin") {
-//       return res.status(403).json({
-//         success: false,
-//         message: "Cannot ban another admin",
-//       });
-//     }
-
-//     // Toggle ban status
-//     const newBanStatus = !user.isBanned;
-//     const updatedUser = await User.updateUser(userId, {
-//       isBanned: newBanStatus,
-//       bannedAt: newBanStatus ? new Date() : null,
-//     });
-
-//     if (updatedUser) {
-//       res.status(200).json({
-//         success: true,
-//         message: `User ${newBanStatus ? "banned" : "unbanned"} successfully`,
-//         data: {
-//           userId: updatedUser.userId,
-//           isBanned: updatedUser.isBanned,
-//           bannedAt: updatedUser.bannedAt,
-//         },
-//       });
-//     } else {
-//       throw new Error("Failed to update user ban status");
-//     }
-//   } catch (err) {
-//     console.error("Error in toggleBanUser:", err.message);
-//     res.status(500).json({
-//       success: false,
-//       message: "Failed to ban/unban user",
-//       error: err.message,
-//     });
-//   }
-// };
+    if (updatedUser) {
+      const isBanned = updatedUser.role.endsWith("-ban");
+      res.status(200).json({
+        success: true,
+        message: `User ${isBanned ? "banned" : "unbanned"} successfully`,
+        data: {
+          userId: updatedUser.userId,
+          name: updatedUser.name,
+          role: updatedUser.role,
+          isBanned: isBanned,
+        },
+      });
+    } else {
+      throw new Error("Failed to toggle user ban status");
+    }
+  } catch (err) {
+    console.error("Error in toggleBanUser:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to ban/unban user",
+      error: err.message,
+    });
+  }
+};
 
 // Get all users (admin view with additional info)
 // export const getAllUsers = async (req, res) => {

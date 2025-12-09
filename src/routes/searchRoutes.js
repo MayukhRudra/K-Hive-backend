@@ -1,6 +1,3 @@
-// routes/searchRoutes.js
-// CREATE THIS NEW FILE
-
 import express from "express";
 import {
   autocomplete,
@@ -10,6 +7,7 @@ import {
   getIndexStatus
 } from "../controllers/searchController.js";
 import { attachUser, isAuthenticated } from "../middleware/authMiddleware.js";
+import { isAdmin } from "../middleware/adminMiddleware.js";
 
 const router = express.Router();
 
@@ -18,10 +16,8 @@ router.get("/autocomplete", attachUser, autocomplete);
 router.get("/tags", attachUser, getTagSuggestions);
 router.get("/status", getIndexStatus);
 
-// Protected routes
-router.post("/increment", isAuthenticated, incrementScore);
-
-// Admin routes (add proper admin middleware later)
-router.post("/rebuild", rebuildIndex);
+// Admin routes
+router.post("/rebuild", isAdmin, rebuildIndex);
+router.post("/increment", isAdmin, incrementScore);
 
 export default router;

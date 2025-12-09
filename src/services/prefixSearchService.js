@@ -1,6 +1,3 @@
-// services/prefixSearchService.js
-// OPTIMIZED: All fixes applied
-
 import { postsTree, usersTree, tagsTree } from '../config/prefixTree.js';
 import Post from '../models/Post.js';
 import User from '../models/User.js';
