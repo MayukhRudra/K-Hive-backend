@@ -54,6 +54,69 @@ class Comment {
     }
   }
 
+  static async populateUserData(comments) {
+  if (!comments || comments.length === 0) return comments;
+
+  // Extract unique userIds
+  const userIds = [...new Set(comments.map(c => c.userId))];
+
+  const userMap = new Map();
+  const missingUserIds = [];
+
+  // Check Redis cache first
+  for (const userId of userIds) {
+    const cachedUser = await rediscon.usersCacheGet(userId);
+    if (cachedUser) {
+      userMap.set(userId, {
+        userId: cachedUser.userId,
+        name: cachedUser.name,
+        avatarLink: cachedUser.avatarLink,
+        role: cachedUser.role
+      });
+    } else {
+      missingUserIds.push(userId);
+    }
+  }
+
+  // Fetch missing users from Mongo
+  if (missingUserIds.length > 0) {
+    const collection = await mongocon.usersCollection();
+    if (collection) {
+      const users = await collection
+        .find({ userId: { $in: missingUserIds } })
+        .project({
+          userId: 1,
+          name: 1,
+          avatarLink: 1,
+          role: 1
+        })
+        .toArray();
+
+      const cachePairs = {};
+      users.forEach(user => {
+        userMap.set(user.userId, user);
+        cachePairs[user.userId] = user;
+      });
+
+      if (Object.keys(cachePairs).length > 0) {
+        await rediscon.usersCacheMSet(cachePairs);
+      }
+    }
+  }
+
+  // 3️⃣ Attach user object to each comment
+  return comments.map(comment => ({
+    ...comment,
+    user: userMap.get(comment.userId) || {
+      userId: comment.userId,
+      name: "Unknown",
+      avatarLink: null,
+      role: "user"
+    }
+  }));
+}
+
+
   // Find comment by Comment ID
   static async findByCommentId(commentId) {
     const redisComment = await rediscon.commentsCacheGet(commentId);
@@ -148,8 +211,9 @@ class Comment {
           .map(id => commentsMap.get(id))
           .filter(comment => comment && !comment.isDeleted);
 
+        const populated = await Comment.populateUserData(orderedComments);
         return {
-          comments: orderedComments,
+          comments: populated,
           pagination: {
             page,
             limit,
@@ -216,61 +280,64 @@ class Comment {
   }
 
   // Get replies to a specific comment
-  static async getRepliesByCommentId(parentCommentId, page = 1, limit = 10) {
-    try {
-      const collection = await mongocon.commentsCollection();
-      if (!collection) throw new Error("Database connection failed");
+static async getRepliesByCommentId(parentCommentId, page = 1, limit = 10) {
+  try {
+    const collection = await mongocon.commentsCollection();
+    if (!collection) throw new Error("Database connection failed");
 
-      const skip = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
-      // Use aggregation pipeline with $facet to get replies and count in one query
-      const result = await collection.aggregate([
-        {
-          $match: { 
-            parentCommentId,
-            isDeleted: false
-          }
-        },
-        {
-          $facet: {
-            replies: [
-              { $sort: { createdAt: 1 } }, // Oldest first for replies
-              { $skip: skip },
-              { $limit: limit }
-            ],
-            totalCount: [
-              { $count: "count" }
-            ]
-          }
+    // Use aggregation pipeline with $facet to get replies and count in one query
+    const result = await collection.aggregate([
+      {
+        $match: { 
+          parentCommentId,
+          isDeleted: false
         }
-      ]).toArray();
-
-      const replies = result[0].replies;
-      const total = result[0].totalCount[0]?.count || 0;
-
-      // Cache fetched replies
-      if (replies.length > 0) {
-        const cachePairs = {};
-        replies.forEach((reply) => {
-          cachePairs[reply.commentId] = reply;
-        });
-        await rediscon.commentsCacheMSet(cachePairs);
+      },
+      {
+        $facet: {
+          replies: [
+            { $sort: { createdAt: 1 } }, // Oldest first for replies
+            { $skip: skip },
+            { $limit: limit }
+          ],
+          totalCount: [
+            { $count: "count" }
+          ]
+        }
       }
+    ]).toArray();
 
-      return {
-        replies,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit),
-        },
-      };
-    } catch (err) {
-      console.error("Error getting replies by comment ID:", err.message);
-      throw err;
+    const replies = result[0].replies;
+    const total = result[0].totalCount[0]?.count || 0;
+
+    // Cache fetched replies
+    if (replies.length > 0) {
+      const cachePairs = {};
+      replies.forEach((reply) => {
+        cachePairs[reply.commentId] = reply;
+      });
+      await rediscon.commentsCacheMSet(cachePairs);
     }
+
+    // IMPORTANT: Populate user data for replies
+    const populatedReplies = await Comment.populateUserData(replies);
+
+    return {
+      replies: populatedReplies,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  } catch (err) {
+    console.error("Error getting replies by comment ID:", err.message);
+    throw err;
   }
+}
 
   // Get comments by user ID
   // Get comments by user ID with pagination - optimized version
