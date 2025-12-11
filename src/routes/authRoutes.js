@@ -9,6 +9,10 @@ import {
   refreshToken,
   updateUser,
 } from "../controllers/authController.js";
+import {
+  loginRateLimit,
+  userUpdateRateLimit
+} from "../middleware/rateLimitMiddleware.js";
 
 const router = express.Router();
 
@@ -27,10 +31,11 @@ router.get(
     failureRedirect: `${process.env.FRONTEND_URL}/login?error=auth_failed`,
     session: false,
   }),
+  loginRateLimit,
   googleCallback
 );
 
-router.get("/user", isAuthenticated, getCurrentUser);
+router.get("/user", isAuthenticated, userUpdateRateLimit, getCurrentUser);
 
 router.put("/user", isAuthenticated, updateUser);
 

@@ -30,6 +30,10 @@ const allowedOrigins = [
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
+if (process.env.NODE_ENV === "production") {
+  console.log = () => {};
+}
+
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);

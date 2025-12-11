@@ -1,6 +1,3 @@
-// config/prefixTree.js
-// OPTIMIZED: Redis Pipeline Batching + All fixes applied
-
 import rediscon from './rediscon.js';
 
 class PrefixTree {

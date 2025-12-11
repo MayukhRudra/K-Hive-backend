@@ -4,6 +4,7 @@ import {
   toggleLockPost,
   deleteAnyPost,
   getDashboardStats,
+  toggleBanUser,
 } from "../controllers/adminController.js";
 import { isAdmin } from "../middleware/adminMiddleware.js";
 
@@ -19,7 +20,7 @@ router.delete("/posts/:postId", deleteAnyPost);
 
 // User management routes
 // router.get("/users", getAllUsers);
-// router.patch("/users/:userId/ban", toggleBanUser);
+router.get("/users/:userId/toggleban", toggleBanUser);
 
 // Dashboard routes
 router.get("/dashboard/stats", getDashboardStats);
