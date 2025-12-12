@@ -171,15 +171,6 @@ export const getFeedbackByUserId = async (req, res) => {
       });
     }
 
-    // Check if user exists
-    const user = await User.findByUserId(userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
     const result = await Feedback.getFeedbackByUserId(userId, page, limit);
 
     res.status(200).json({
