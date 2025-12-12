@@ -5,6 +5,7 @@ import { deleteFileByUrl } from "../config/imagekitcon.js";
 import User from "./User.js"
 import PrefixSearchService from '../services/prefixSearchService.js';
 import Vote from "./Vote.js"
+import sentimentAnalysisService from '../utils/sentimentAnalyzer.js';
 
 class Post {
   constructor(data) {
@@ -674,6 +675,122 @@ static async getAllPostsFromDB(page = 1, limit = 10, sortBy = "createdAt", order
     }
   }
 
+  static async enhancedSearch(query, page = 1, limit = 10) {
+    try {
+      const postsCollection = await mongocon.postsCollection();
+      const commentsCollection = await mongocon.commentsCollection();
+      
+      if (!postsCollection || !commentsCollection) {
+        throw new Error("Database connection failed");
+      }
+
+      const skip = (page - 1) * limit;
+
+      // Expand query with synonyms and spell corrections
+      const expandedTerms = await sentimentAnalysisService.expandQueryForSearch(query);
+      
+      //console.log(`[ENHANCED SEARCH] Original: "${query}"`);
+      //console.log(`[ENHANCED SEARCH] Expanded to ${expandedTerms.length} terms:`, expandedTerms.slice(0, 15).join(', '));
+
+      // Build flexible regex pattern
+      const regexPattern = expandedTerms
+        .map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+
+      // Search in posts
+      const postQuery = {
+        $or: [
+          { title: { $regex: regexPattern, $options: 'i' } },
+          { content: { $regex: regexPattern, $options: 'i' } },
+          { tags: { $regex: regexPattern, $options: 'i' } }
+        ]
+      };
+
+      const posts = await postsCollection
+        .find(postQuery)
+        .sort({ createdAt: -1 })
+        .limit(limit * 2)
+        .toArray();
+
+      // Search in comments
+      const commentQuery = {
+        content: { $regex: regexPattern, $options: 'i' }
+      };
+
+      const matchingComments = await commentsCollection
+        .find(commentQuery)
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .toArray();
+
+      //console.log(`[ENHANCED SEARCH] Found ${posts.length} posts, ${matchingComments.length} comments`);
+
+      // Get parent posts for matching comments
+      const commentPostIds = [...new Set(matchingComments.map(c => c.postId))];
+      
+      let commentPosts = [];
+      if (commentPostIds.length > 0) {
+        commentPosts = await postsCollection
+          .find({ postId: { $in: commentPostIds } })
+          .toArray();
+      }
+
+      // Merge results
+      const allPostIds = new Set(posts.map(p => p.postId));
+      const additionalPosts = commentPosts.filter(p => !allPostIds.has(p.postId));
+      
+      // Calculate relevance scores
+      const scoredPosts = posts.map(post => ({
+        ...post,
+        relevanceScore: sentimentAnalysisService.calculateSearchRelevance(post, expandedTerms, false),
+        matchType: 'direct'
+      }));
+
+      const scoredCommentPosts = additionalPosts.map(post => {
+        const postComments = matchingComments.filter(c => c.postId === post.postId);
+        return {
+          ...post,
+          relevanceScore: sentimentAnalysisService.calculateSearchRelevance(post, expandedTerms, false) + 
+                         (postComments.length * 2),
+          matchType: 'comment',
+          matchingCommentCount: postComments.length
+        };
+      });
+
+      // Combine and sort by relevance
+      const allResults = [...scoredPosts, ...scoredCommentPosts]
+        .sort((a, b) => b.relevanceScore - a.relevanceScore)
+        .slice(skip, skip + limit);
+
+      // Populate user and vote data
+      const populatedPosts = await Post.populatePostData(allResults);
+
+      // Get total counts
+      const totalPosts = await postsCollection.countDocuments(postQuery);
+      const totalFromComments = commentPostIds.length;
+      const total = Math.max(totalPosts, totalFromComments);
+
+      return {
+        posts: populatedPosts,
+        matchingComments: matchingComments.slice(0, 10),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        },
+        searchInfo: {
+          originalQuery: query,
+          expandedTerms: expandedTerms.slice(0, 20),
+          foundInComments: matchingComments.length > 0,
+          totalCommentMatches: matchingComments.length
+        }
+      };
+    } catch (err) {
+      console.error("Error in enhanced search:", err.message);
+      throw err;
+    }
+  }
   // Update post
   static async updatePost(postId, updateData) {
     try {

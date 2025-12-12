@@ -192,9 +192,10 @@ export const getPostsByUserId = async (req, res) => {
 // Search posts
 export const searchPosts = async (req, res) => {
   try {
-    const { q, sortBy = "relevance" } = req.query;
+    const { q, sortBy = "relevance", enhanced } = req.query;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
+    const userId = req.user?.userId || null;
 
     // Validate query
     if (!q || q.trim().length < 2) {
@@ -212,11 +213,30 @@ export const searchPosts = async (req, res) => {
       });
     }
 
+    if (enhanced === "true") {
+      console.log(`[ENHANCED SEARCH] Query: "${q.trim()}"`);
+      
+      const result = await Post.enhancedSearch(q.trim(), page, limit, userId);
+
+      return res.status(200).json({
+        success: true,
+        message: "Search results retrieved successfully (enhanced)",
+        data: result.posts,
+        matchingComments: result.matchingComments,
+        pagination: result.pagination,
+        searchInfo: result.searchInfo,
+        query: q.trim()
+      });
+    }
+
     // Validate sortBy
     const validSortOptions = ["relevance", "recent", "popular"];
     const finalSortBy = validSortOptions.includes(sortBy) ? sortBy : "relevance";
     
     const result = await Post.searchPosts(q.trim(), page, limit, finalSortBy);
+    
+    // Populate user data for regular search
+    const populatedPosts = await Post.populatePostData(result.posts, userId);
 
     res.status(200).json({
       success: true,
@@ -236,7 +256,9 @@ export const searchPosts = async (req, res) => {
         const { q } = req.query;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
+        const userId = req.user?.userId || null;
         const result = await Post.regexSearchPosts(q.trim(), page, limit);
+        const populatedPosts = await Post.populatePostData(result.posts, userId);
         return res.status(200).json({
           success: true,
           message: "Search results retrieved successfully (regex mode)",

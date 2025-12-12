@@ -4,11 +4,10 @@ import {
   getAllPosts,
   getPostById,
   getPostsByUserId,
-  searchPosts,
   updatePost,
   deletePost,
   upvotePost,
-  downvotePost,
+  downvotePost
 } from "../controllers/postController.js";
 import { isAuthenticated, attachUser } from "../middleware/authMiddleware.js";
 import moderation from "../middleware/moderation.js";
@@ -22,7 +21,6 @@ const router = express.Router();
 
 // Public routes 
 router.get("/", attachUser, getAllPosts);
-router.get("/search", attachUser, searchPosts);
 router.get("/user/:userId", attachUser, getPostsByUserId);
 router.get("/:postId", attachUser, getPostById);
 

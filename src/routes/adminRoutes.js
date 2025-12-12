@@ -7,6 +7,11 @@ import {
   toggleBanUser,
 } from "../controllers/adminController.js";
 import { isAdmin } from "../middleware/adminMiddleware.js";
+import {
+  incrementScore,
+  rebuildIndex,
+  getIndexStatus
+} from "../controllers/searchController.js";
 
 const router = express.Router();
 
@@ -17,6 +22,11 @@ router.use(isAdmin);
 router.patch("/posts/:postId/pin", togglePinPost);
 router.patch("/posts/:postId/lock", toggleLockPost);
 router.delete("/posts/:postId", deleteAnyPost);
+
+// Search Routes
+router.post("/search-index/rebuild", rebuildIndex);
+router.post("/search-index/increment", incrementScore);
+router.get("/search-index/status", getIndexStatus);
 
 // User management routes
 // router.get("/users", getAllUsers);
