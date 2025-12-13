@@ -315,6 +315,7 @@ class PrefixSearchService {
       return {
         success: true,
         indexReady: true,
+        isBuilding: this.isRebuilding,
         query,
         results: {
           posts: posts.slice(0, limit * 2), // Return more posts since we're combining sources
@@ -328,6 +329,7 @@ class PrefixSearchService {
       return {
         success: false,
         indexReady: this.isIndexReady,
+        isBuilding: this.isRebuilding,
         query,
         results: { posts: [], users: [], tags: [], total: 0 },
         error: err.message
