@@ -105,6 +105,39 @@ export const getAllPosts = async (req, res) => {
   }
 };
 
+// Get all pinned-posts with pagination
+export const getPinnedPosts = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const userId = req.user?.userId || null; // Get userId if authenticated
+
+    // Validate pagination
+    if (page < 1 || limit < 1 || limit > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
+    const result = await Post.getPinnedPosts(page, limit, userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Pinned-Posts retrieved successfully",
+      data: result.posts,
+      pagination: result.pagination,
+    });
+  } catch (err) {
+    console.error("Error in getPinnedPosts:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve pinned-posts",
+      error: err.message,
+    });
+  }
+};
+
 export const getPostById = async (req, res) => {
   try {
     const { postId } = req.params;

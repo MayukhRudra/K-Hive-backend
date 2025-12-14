@@ -1060,8 +1060,8 @@ static async upvote(postId) {
     }
   }
 
-  // Toggle pin
-  static async togglePin(postId) {
+    // Toggle pin
+    static async togglePin(postId) {
     try {
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
@@ -1069,13 +1069,29 @@ static async upvote(postId) {
       const post = await collection.findOne({ postId });
       if (!post) throw new Error("Post not found");
 
+      const newPinnedState = !post.isPinned;
+      
       const result = await collection.updateOne(
         { postId },
-        { $set: { isPinned: !post.isPinned } }
+        { $set: { isPinned: newPinnedState } }
       );
 
       if (result.modifiedCount > 0) {
         await rediscon.postsCacheDel(postId);
+        
+        const pinnedFeedKey = Post.getPinnedFeedCacheKey();
+        
+        if (newPinnedState) {
+          // Post was pinned - add to pinned cache
+          await rediscon.feedCachePushFront(pinnedFeedKey, postId);
+          await rediscon.feedCacheTrim(pinnedFeedKey, 0, 49);
+        } else {
+          // Post was unpinned - remove from pinned cache
+          await rediscon.feedCacheRemove(pinnedFeedKey, postId);
+        }
+        
+        // Invalidate pinned total count
+        await rediscon.feedCacheClear("posts:total:pinned");
       }
 
       return result.modifiedCount > 0;
@@ -1112,47 +1128,230 @@ static async upvote(postId) {
 
   // Delete post
   static async deletePost(postId, userId) {
+  try {
+    const collection = await mongocon.postsCollection();
+    if (!collection) throw new Error("Database connection failed");
+
+    const post = await collection.findOne({ postId });
+    if (!post) return false;
+    
+    if (post && post.media && post.media.length > 0) {
+      const deletePromises = post.media.map(async (mediaUrl) => {
+          if(!(await deleteFileByUrl(mediaUrl)))
+            console.error(`Failed to delete media: ${mediaUrl}`);
+        }
+      );
+      await Promise.all(deletePromises);
+    }
+
+    const result = await collection.deleteOne({ postId });
+    
+    if (result.deletedCount > 0) {
+      // Remove from individual post cache
+      await rediscon.postsCacheDel(postId);
+      
+      // Remove from user's posts
+      await User.removePost(userId, postId);
+      
+      // Remove from ALL feed caches
+      await rediscon.feedCacheRemove(Post.getFeedCacheKey("createdAt", -1), postId);
+      await rediscon.feedCacheRemove(Post.getFeedCacheKey("createdAt", 1), postId);
+      await rediscon.feedCacheRemove(Post.getFeedCacheKey("upvotes", -1), postId);
+      
+      // If post was pinned, remove from pinned cache
+      if (post.isPinned) {
+        await rediscon.feedCacheRemove(Post.getPinnedFeedCacheKey(), postId);
+        await rediscon.feedCacheClear("posts:total:pinned");
+      }
+      
+      // Invalidate total count cache
+      await rediscon.feedCacheClear("posts:total:createdAt");
+      await rediscon.feedCacheClear("posts:total:upvotes");
+
+      PrefixSearchService.removePostIndex(post);
+      Vote.deleteVotesByPostId(postId);
+    }
+    
+    return result.deletedCount > 0;
+  } catch (err) {
+    console.error("Error deleting post:", err.message);
+    throw err;
+  }
+}
+
+
+  // Helper: Get pinned feed cache key
+  static getPinnedFeedCacheKey() {
+    return `posts:feed:pinned:desc`;
+  }
+
+  // Helper: Rebuild pinned feed cache from database
+  static async rebuildPinnedFeedCache(limit = 50) {
+    try {
+      const collection = await mongocon.postsCollection();
+      if (!collection) return false;
+
+      const posts = await collection
+        .find({ isPinned: true })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .toArray();
+
+      if (posts.length === 0) return true;
+
+      const feedKey = Post.getPinnedFeedCacheKey();
+      
+      // Use Redis pipeline for atomic operation
+      await rediscon.feedCacheClear(feedKey);
+      await rediscon.feedCachePush(feedKey, posts.map(p => p.postId));
+      await rediscon.feedCacheTrim(feedKey, 0, limit - 1);
+
+      // Also cache individual posts
+      const cachePairs = {};
+      posts.forEach((post) => {
+        cachePairs[post.postId] = post;
+      });
+      await rediscon.postsCacheMSet(cachePairs);
+
+      console.log(`[PINNED FEED CACHE] Rebuilt with ${posts.length} posts`);
+      return true;
+    } catch (err) {
+      console.error("Error rebuilding pinned feed cache:", err.message);
+      return false;
+    }
+  }
+
+  // Get pinned posts with pagination - OPTIMIZED VERSION
+  static async getPinnedPosts(page = 1, limit = 10, userId = null) {
     try {
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
 
-      const post = await collection.findOne({ postId });
-      if (!post) return false;
+      const feedKey = Post.getPinnedFeedCacheKey();
+      const start = (page - 1) * limit;
+      const end = start + limit - 1;
+
+      let postIds = await rediscon.feedCacheRange(feedKey, start, end);
       
-      if (post && post.media && post.media.length > 0) {
-        const deletePromises = post.media.map(async (mediaUrl) => {
-            if(!(await deleteFileByUrl(mediaUrl)))
-              console.error(`Failed to delete media: ${mediaUrl}`);
-          }
-        );
-        await Promise.all(deletePromises);
+      if (!postIds || postIds.length === 0) {
+        console.log(`[PINNED FEED CACHE] Miss, rebuilding...`);
+        await Post.rebuildPinnedFeedCache(50);
+        postIds = await rediscon.feedCacheRange(feedKey, start, end);
       }
 
-      const result = await collection.deleteOne({ postId });
-      
-      if (result.deletedCount > 0) {
-        // Remove from individual post cache
-        await rediscon.postsCacheDel(postId);
-        
-        // Remove from user's posts
-        await User.removePost(userId, postId);
-        
-        // Remove from ALL feed caches (more efficient than clearing)
-        await rediscon.feedCacheRemove(Post.getFeedCacheKey("createdAt", -1), postId);
-        await rediscon.feedCacheRemove(Post.getFeedCacheKey("createdAt", 1), postId);
-        await rediscon.feedCacheRemove(Post.getFeedCacheKey("upvotes", -1), postId);
-        
-        // Invalidate total count cache
-        await rediscon.feedCacheClear("posts:total:createdAt");
-        await rediscon.feedCacheClear("posts:total:upvotes");
-
-        PrefixSearchService.removePostIndex(post);
-        Vote.deleteVotesByPostId(postId)
+      if (!postIds || postIds.length === 0) {
+        console.log(`[PINNED FEED CACHE] Fallback to DB query`);
+        return await Post.getPinnedPostsFromDB(page, limit, userId);
       }
+
+      const posts = [];
+      const missingIds = [];
+
+      for (const postId of postIds) {
+        const cachedPost = await rediscon.postsCacheGet(postId);
+        if (cachedPost) {
+          posts.push(cachedPost);
+        } else {
+          missingIds.push(postId);
+        }
+      }
+
+      if (missingIds.length > 0) {
+        const missingPosts = await collection
+          .find({ postId: { $in: missingIds } })
+          .toArray();
+
+        const cachePairs = {};
+        missingPosts.forEach((post) => {
+          cachePairs[post.postId] = post;
+          posts.push(post);
+        });
+        await rediscon.postsCacheMSet(cachePairs);
+      }
+
+      const postsMap = new Map(posts.map(p => [p.postId, p]));
+      const orderedPosts = postIds
+        .map(id => postsMap.get(id))
+        .filter(Boolean);
+
+      // Populate user and vote data
+      const populatedPosts = await Post.populatePostData(orderedPosts, userId);
+
+      const totalKey = `posts:total:pinned`;
+      let total = await rediscon.feedCacheGetTotal(totalKey);
       
-      return result.deletedCount > 0;
+      if (!total) {
+        total = await collection.countDocuments({ isPinned: true });
+        await rediscon.feedCacheSetTotal(totalKey, total, 300);
+      }
+
+      return {
+        posts: populatedPosts,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
     } catch (err) {
-      console.error("Error deleting post:", err.message);
+      console.error("Error getting pinned posts:", err.message);
+      throw err;
+    }
+  }
+
+  // Fallback function for pinned posts
+  static async getPinnedPostsFromDB(page = 1, limit = 10, userId = null) {
+    try {
+      const collection = await mongocon.postsCollection();
+      if (!collection) throw new Error("Database connection failed");
+
+      const skip = (page - 1) * limit;
+
+      const result = await collection.aggregate([
+        {
+          $match: { isPinned: true }
+        },
+        {
+          $facet: {
+            posts: [
+              { $sort: { createdAt: -1 } },
+              { $skip: skip },
+              { $limit: limit }
+            ],
+            totalCount: [
+              { $count: "count" }
+            ]
+          }
+        }
+      ]).toArray();
+
+      const posts = result[0].posts;
+      const total = result[0].totalCount[0]?.count || 0;
+
+      // Populate user and vote data
+      const populatedPosts = await Post.populatePostData(posts, userId);
+
+      // Cache the posts
+      if (posts.length > 0) {
+        const cachePairs = {};
+        posts.forEach((post) => {
+          cachePairs[post.postId] = post;
+        });
+        await rediscon.postsCacheMSet(cachePairs);
+      }
+
+      return {
+        posts: populatedPosts,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    } catch (err) {
+      console.error("Error in getPinnedPostsFromDB:", err.message);
       throw err;
     }
   }

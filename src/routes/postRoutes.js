@@ -2,6 +2,7 @@ import express from "express";
 import {
   createPost,
   getAllPosts,
+  getPinnedPosts,
   getPostById,
   getPostsByUserId,
   updatePost,
@@ -21,6 +22,7 @@ const router = express.Router();
 
 // Public routes 
 router.get("/", attachUser, getAllPosts);
+router.get("/pinned", attachUser, getPinnedPosts);
 router.get("/user/:userId", attachUser, getPostsByUserId);
 router.get("/:postId", attachUser, getPostById);
 
