@@ -38,9 +38,33 @@ Input to moderate:`;
 
 export default async function moderation(req, res, next) {
   try {
-    const { title = "", content = "" } = req.body;
-    const text = (title + " " + content).trim();
+    const { title = "", content = "" , tags=[]} = req.body;
 
+    if(tags.length>5)
+    {
+      return res.status(400).json({
+        success: false,
+        message: "Too many tags"
+      });
+    }
+
+    for(const tag of tags){
+      if(tag.length<2 || tag.length>20)
+      {
+        return res.status(400).json({
+        success: false,
+        message: "Use tags of length 2..20"
+      });
+      }
+      if (matcher.hasMatch(tag)) {
+        return res.status(400).json({
+          success: false,
+          message: "Your tags contain inappropriate language."
+        });
+      }
+    }
+    
+    const text = (title + " " + content).trim();
     if (!text || text.length < 3) {
       return res.status(400).json({
         success: false,
